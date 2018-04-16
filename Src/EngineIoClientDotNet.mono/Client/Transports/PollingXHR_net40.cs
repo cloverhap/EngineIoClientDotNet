@@ -272,6 +272,7 @@ namespace Quobject.EngineIoClientDotNet.Client.Transports
                     log.Info(string.Format("xhr open {0}: {1}", Method, Uri));
                     Xhr = (HttpWebRequest) WebRequest.Create(Uri);
                     Xhr.Method = Method;
+                    Xhr.Credentials = CredentialCache.DefaultNetworkCredentials;
                     if (CookieHeaderValue != null)
                     {
                         Xhr.Headers.Add("Cookie", CookieHeaderValue);
