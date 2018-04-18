@@ -5,6 +5,7 @@ using Quobject.EngineIoClientDotNet.Parser;
 using System;
 using System.Collections.Generic;
 using WebSocket4Net;
+using SuperSocket.ClientEngine.Proxy.EngineIo;
 
 namespace Quobject.EngineIoClientDotNet.Client.Transports
 {
@@ -48,7 +49,18 @@ namespace Quobject.EngineIoClientDotNet.Client.Transports
             ws.MessageReceived += ws_MessageReceived;
             ws.DataReceived += ws_DataReceived;
             ws.Error += ws_Error;
-            ws.Open();                            
+
+            var destUrl = new UriBuilder(this.Uri());
+            destUrl.Scheme = this.Secure ? "https" : "http";
+            var useProxy = !WebRequest.DefaultWebProxy.IsBypassed(destUrl.Uri);
+            if (useProxy)
+            {
+                var proxyUrl = WebRequest.DefaultWebProxy.GetProxy(destUrl.Uri);
+                var receiveBufferSize = 512 * 1024;
+                var proxy = new HttpConnectProxy(new DnsEndPoint(proxyUrl.Host, proxyUrl.Port), receiveBufferSize, destUrl.Host);
+                ws.Proxy = proxy;
+            }
+            ws.Open();
         }
 
         void ws_DataReceived(object sender, DataReceivedEventArgs e)

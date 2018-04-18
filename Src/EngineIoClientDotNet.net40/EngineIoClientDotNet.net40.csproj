@@ -36,6 +36,9 @@
     </Reference>
     <Reference Include="SuperSocket.ClientEngine, Version=0.9.0.0, Culture=neutral, PublicKeyToken=ee9af13f57f00acc, processorArchitecture=MSIL">
       <HintPath>packages\SuperSocket.ClientEngine.Core.0.9.0\lib\net40-client\SuperSocket.ClientEngine.dll</HintPath>
+    <Reference Include="NSspi, Version=0.2.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>packages\NSspi.0.2.0\lib\net40\NSspi.dll</HintPath>
+    </Reference>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
@@ -118,6 +121,8 @@
     <Compile Include="..\EngineIoClientDotNet.mono\Thread\TriggeredLoopTimer_net35.cs">
       <Link>Thread\TriggeredLoopTimer_net35.cs</Link>
     </Compile>
+    <Compile Include="Client\HttpConnectProxy.cs" />
+    <Compile Include="Client\ProxyConnectorBase.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
