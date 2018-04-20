@@ -20,7 +20,7 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
             public SearchMarkState<byte> SearchState { get; set; }
         }
 
-        private const string m_RequestTemplate = "CONNECT {3}:{1} HTTP/1.1\r\nHost: {0}:{1}\r\nProxy-Connection: Keep-Alive\r\n{2}\r\n";
+        private const string m_RequestTemplate = "CONNECT {3}{0}:{1} HTTP/1.1\r\nHost: {0}:{1}\r\nProxy-Connection: Keep-Alive\r\n{2}\r\n";
 
         private const string m_ResponsePrefix = "HTTP/1.1";
         private const char m_Space = ' ';
@@ -35,11 +35,7 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
         private int m_ReceiveBufferSize;
         private int m_StatusCode;
         private string m_HostPrefix;
-        private string m_AuthProtocol;
-        private string m_ServerAuthChallenge;
-        private ClientCurrentCredential m_ClientCred;
-        private ClientContext m_Client;
-        private byte[] m_ClientToken;
+        private Dictionary<int, AuthToken> m_AuthTokens;
         private EndPoint m_TargetEndPoint;
 
 #if SILVERLIGHT && !WINDOWS_PHONE
@@ -71,6 +67,7 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
             : base(proxyEndPoint, targetHostName)
         {
             m_ReceiveBufferSize = receiveBufferSize;
+            m_AuthTokens = new Dictionary<int, AuthToken>();
         }
 #endif
 
@@ -127,27 +124,24 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
                 m_HostPrefix = "/";
 
             string authorizationHeader = null;
-            if (m_StatusCode == 401)
-            {
-                var auth = getClientToken(m_AuthProtocol, m_ServerAuthChallenge);
-                authorizationHeader = string.Format("Authorization: {0} {1}\r\n", m_AuthProtocol, auth);
-            }
+            if (m_StatusCode == 401 || m_StatusCode == 407)
+                authorizationHeader = m_AuthTokens[m_StatusCode].GetAuthorizationHeader();
 
             m_TargetEndPoint = (EndPoint)targetEndPoint;
             if (targetEndPoint is DnsEndPoint)
             {
                 var targetDnsEndPoint = (DnsEndPoint)targetEndPoint;
-                request = string.Format(m_RequestTemplate, targetDnsEndPoint.Host, targetDnsEndPoint.Port, authorizationHeader, m_HostPrefix + targetDnsEndPoint.Host);
+                request = string.Format(m_RequestTemplate, targetDnsEndPoint.Host, targetDnsEndPoint.Port, authorizationHeader, m_HostPrefix);
             }
             else
             {
                 var targetIPEndPoint = (IPEndPoint)targetEndPoint;
-                request = string.Format(m_RequestTemplate, targetIPEndPoint.Address, targetIPEndPoint.Port, authorizationHeader, m_HostPrefix + targetIPEndPoint.Address);
+                request = string.Format(m_RequestTemplate, targetIPEndPoint.Address, targetIPEndPoint.Port, authorizationHeader, m_HostPrefix);
             }
 
             var requestData = ASCIIEncoding.GetBytes(request);
 
-            if (m_StatusCode != 401)
+            if (m_StatusCode != 401 && m_StatusCode != 407)
                 e.Completed += AsyncEventArgsCompleted;
 
             e.UserToken = new ConnectContext { Socket = socket, SearchState = new SearchMarkState<byte>(m_LineSeparator) };
@@ -260,30 +254,13 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
                 }
                 return;
             }
-            else if (statusCode == 401)
+            else if (statusCode == 401 || statusCode == 407)
             {
                 m_StatusCode = statusCode;
-
-                List<string> authenticationMethods = new List<string>();
-                while ((line = lineReader.ReadLine()) != null)
-                {
-                    if (line.IndexOf("WWW-Authenticate: ") > -1)
-                        authenticationMethods.Add(line.Substring(line.IndexOf("WWW-Authenticate: ") + 18));
-                }
-
-                string[] methodNames = new string[] { PackageNames.Negotiate, PackageNames.Kerberos, PackageNames.Ntlm };
-                foreach (var methodName in methodNames) {
-                    int methodIndex = authenticationMethods.FindIndex(s => s.IndexOf(methodName) > -1);
-                    if (methodIndex > -1)
-                    {
-                        string methodString = authenticationMethods[methodIndex];
-                        if (methodString.Contains(" "))
-                            m_ServerAuthChallenge = methodString.Substring(methodString.IndexOf(" ") + 1);
-
-                        m_AuthProtocol = methodName;
-                    }
-                }
-
+                if (!m_AuthTokens.ContainsKey(statusCode))
+                    m_AuthTokens.Add(statusCode, new AuthToken(statusCode, lineReader));
+                else
+                    m_AuthTokens[statusCode].SetNextHeaders(lineReader);
                 ProcessConnect(((ConnectContext)e.UserToken).Socket, m_TargetEndPoint, e, null);
                 return;
             }
@@ -292,52 +269,125 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
                 OnException("the proxy server refused the connection");
                 return;
             }
-
-            if (m_Client != null)
+            
+            foreach (var tokenPair in m_AuthTokens)
             {
-                m_Client.Dispose();
+                tokenPair.Value.Dispose();
             }
-
-            if (m_ClientCred != null)
-            {
-                m_ClientCred.Dispose();
-            }
+            m_AuthTokens = new Dictionary<int, AuthToken>();
 
             OnCompleted(new ProxyEventArgs(context.Socket, TargetHostHame));
         }
 
-        private string getClientToken(string packageName, string serverAuthString = null)
+        class AuthToken
         {
-            try
-            {
-                if (m_ClientCred == null)
-                    m_ClientCred = new ClientCurrentCredential(packageName);
+            private string m_Header;
+            private string m_AuthenticateHeader;
+            private string m_AuthProtocol;
+            private string m_ServerAuthChallenge;
+            private ClientCurrentCredential m_ClientCred;
+            private ClientContext m_Client;
+            private byte[] m_ClientToken;
+            private List<string> m_AuthMethods;
 
-                if (m_Client == null)
+            private static Dictionary<int, string> CODE_TO_HEADER = new Dictionary<int, string>
+            {
+                { 401, "Authorization" },
+                { 407, "Proxy-Authorization" }
+            };
+            private static Dictionary<int, string> CODE_TO_AUTHENTICATE_HEADER = new Dictionary<int, string>
+            {
+                { 401, "WWW-Authenticate: " },
+                { 407, "Proxy-Authenticate: " }
+            };
+            private static string[] METHOD_NAMES = new string[] { PackageNames.Negotiate, PackageNames.Kerberos, PackageNames.Ntlm };
+
+            public AuthToken(int statusCode, StringReader lineReader)
+            {
+                m_AuthenticateHeader = CODE_TO_AUTHENTICATE_HEADER[statusCode];
+                m_Header = CODE_TO_HEADER[statusCode];
+                SetFirstHeaders(lineReader);
+                m_ClientCred = new ClientCurrentCredential(m_AuthProtocol);
+                m_Client = new ClientContext(
+                    m_ClientCred,
+                    "",
+                    ContextAttrib.MutualAuth |
+                    ContextAttrib.InitIdentify |
+                    ContextAttrib.Confidentiality |
+                    ContextAttrib.ReplayDetect |
+                    ContextAttrib.SequenceDetect |
+                    ContextAttrib.Connection |
+                    ContextAttrib.Delegate
+                );
+            }
+
+            private void SetFirstHeaders(StringReader lineReader)
+            {
+                m_AuthMethods = new List<string>();
+                string line;
+                while ((line = lineReader.ReadLine()) != null)
                 {
-                    m_Client = new ClientContext(
-                        m_ClientCred,
-                        m_ClientCred.PrincipleName,
-                        ContextAttrib.MutualAuth |
-                        ContextAttrib.InitIdentify |
-                        ContextAttrib.Confidentiality |
-                        ContextAttrib.ReplayDetect |
-                        ContextAttrib.SequenceDetect |
-                        ContextAttrib.Connection |
-                        ContextAttrib.Delegate
-                    );
+                    int authenticateIndex = line.IndexOf(m_AuthenticateHeader);
+                    if (authenticateIndex > -1)
+                        m_AuthMethods.Add(line.Substring(authenticateIndex + 18));
                 }
 
-                byte[] serverToken = serverAuthString == null ? null : Convert.FromBase64String(serverAuthString);
-
-                SecurityStatus clientStatus = m_Client.Init(serverToken, out m_ClientToken);
+                foreach (var methodName in METHOD_NAMES)
+                {
+                    int methodIndex = m_AuthMethods.FindIndex(s => s.IndexOf(methodName) > -1);
+                    if (methodIndex > -1)
+                    {
+                        m_AuthProtocol = methodName;
+                        break;
+                    }
+                }
             }
-            catch (Exception e)
+
+            public void SetNextHeaders(StringReader headersLineReader)
             {
-                OnException("proxy credential token generation error");
+                string line;
+                while ((line = headersLineReader.ReadLine()) != null)
+                {
+                    int authenticateIndex = line.IndexOf(m_AuthenticateHeader);
+                    if (authenticateIndex > -1)
+                    {
+                        int protocolIndex = line.IndexOf(m_AuthProtocol);
+                        if (protocolIndex > -1)
+                        {
+                            string protocolString = line.Substring(protocolIndex);
+                             m_ServerAuthChallenge = protocolString.Substring(protocolString.IndexOf(" ")).Trim();
+                        }
+                    }
+                }
+            }
+            
+            public string GetAuthorizationHeader()
+            {
+                return string.Format("{2}: {0} {1}\r\n", m_AuthProtocol, GetClientToken(m_ServerAuthChallenge), m_Header);
             }
 
-            return m_ClientToken != null ? Convert.ToBase64String(m_ClientToken) : "";
+            public void Dispose()
+            {
+                if (m_Client != null)
+                    m_Client.Dispose();
+                if (m_ClientCred != null)
+                    m_ClientCred.Dispose();
+            }
+
+            private string GetClientToken(string serverAuthString = null)
+            {
+                try
+                {
+                    byte[] serverToken = serverAuthString == null ? null : Convert.FromBase64String(serverAuthString);
+                    SecurityStatus clientStatus = m_Client.Init(serverToken, out m_ClientToken);
+                }
+                catch (Exception e)
+                {
+                    throw new Exception("authentication token generation error", e);
+                }
+             
+                return m_ClientToken != null ? Convert.ToBase64String(m_ClientToken) : "";
+            }
         }
     }
 }
