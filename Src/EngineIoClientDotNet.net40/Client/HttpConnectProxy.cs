@@ -358,8 +358,17 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
                         if (protocolIndex > -1)
                         {
                             string protocolString = line.Substring(protocolIndex);
-                            string challenge = protocolString.Substring(protocolString.IndexOf(" ")).Trim();
-                            GetClientToken(challenge);
+                            int challengeIndex = protocolString.IndexOf(" ");
+                            if (challengeIndex != -1)
+                            {
+                                string challenge = protocolString.Substring(challengeIndex).Trim();
+                                GetClientToken(challenge);
+                                m_ServerAuthChallenge = challenge;
+                            }
+                            else
+                            {
+                                throw new Exception("authentication from server missing authentication challenge");
+                            }
                         }
                     }
                 }
