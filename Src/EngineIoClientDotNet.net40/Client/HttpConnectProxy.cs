@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -123,9 +124,9 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
             if (m_StatusCode == 400)
                 m_HostPrefix = "/";
 
-            string authorizationHeader = null;
+            string authorizationHeader = "";
             if (m_StatusCode == 401 || m_StatusCode == 407)
-                authorizationHeader = m_AuthTokens[m_StatusCode].GetAuthorizationHeader();
+                authorizationHeader = m_AuthTokens.Aggregate("", (sum, next) => sum + next.Value.GetAuthorizationHeader());
 
             m_TargetEndPoint = (EndPoint)targetEndPoint;
             if (targetEndPoint is DnsEndPoint)
@@ -357,7 +358,8 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
                         if (protocolIndex > -1)
                         {
                             string protocolString = line.Substring(protocolIndex);
-                             m_ServerAuthChallenge = protocolString.Substring(protocolString.IndexOf(" ")).Trim();
+                            string challenge = protocolString.Substring(protocolString.IndexOf(" ")).Trim();
+                            GetClientToken(challenge);
                         }
                     }
                 }
@@ -376,16 +378,19 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
                     m_ClientCred.Dispose();
             }
 
-            private string GetClientToken(string serverAuthString = null)
+            private string GetClientToken(string serverAuthString)
             {
-                try
+                if (serverAuthString == null || serverAuthString != m_ServerAuthChallenge)
                 {
-                    byte[] serverToken = serverAuthString == null ? null : Convert.FromBase64String(serverAuthString);
-                    SecurityStatus clientStatus = m_Client.Init(serverToken, out m_ClientToken);
-                }
-                catch (Exception e)
-                {
-                    throw new Exception("authentication token generation error", e);
+                    try
+                    {
+                        byte[] serverToken = serverAuthString == null ? null : Convert.FromBase64String(serverAuthString);
+                        SecurityStatus clientStatus = m_Client.Init(serverToken, out m_ClientToken);
+                    }
+                    catch (Exception e)
+                    {
+                        throw new Exception("authentication token generation error", e);
+                    }
                 }
              
                 return m_ClientToken != null ? Convert.ToBase64String(m_ClientToken) : "";
