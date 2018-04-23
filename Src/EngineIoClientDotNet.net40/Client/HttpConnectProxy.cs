@@ -287,6 +287,7 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
             private string m_ServerAuthChallenge;
             private ClientCurrentCredential m_ClientCred;
             private ClientContext m_Client;
+            private ServerCurrentCredential m_ServerCred;
             private byte[] m_ClientToken;
             private List<string> m_AuthMethods;
 
@@ -308,9 +309,10 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
                 m_Header = CODE_TO_HEADER[statusCode];
                 SetFirstHeaders(lineReader);
                 m_ClientCred = new ClientCurrentCredential(m_AuthProtocol);
+                m_ServerCred = new ServerCurrentCredential(m_AuthProtocol);
                 m_Client = new ClientContext(
                     m_ClientCred,
-                    "",
+                    m_ServerCred.PrincipleName,
                     ContextAttrib.MutualAuth |
                     ContextAttrib.InitIdentify |
                     ContextAttrib.Confidentiality |
