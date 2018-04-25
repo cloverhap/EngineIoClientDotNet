@@ -288,7 +288,6 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
             private string m_ServerAuthChallenge;
             private ClientCurrentCredential m_ClientCred;
             private ClientContext m_Client;
-            private ServerCurrentCredential m_ServerCred;
             private byte[] m_ClientToken;
             private List<string> m_AuthMethods;
 
@@ -309,11 +308,11 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
                 m_AuthenticateHeader = CODE_TO_AUTHENTICATE_HEADER[statusCode];
                 m_Header = CODE_TO_HEADER[statusCode];
                 SetFirstHeaders(lineReader);
+
                 m_ClientCred = new ClientCurrentCredential(m_AuthProtocol);
-                m_ServerCred = new ServerCurrentCredential(m_AuthProtocol);
                 m_Client = new ClientContext(
                     m_ClientCred,
-                    m_ServerCred.PrincipleName,
+                    "",
                     ContextAttrib.MutualAuth |
                     ContextAttrib.InitIdentify |
                     ContextAttrib.Confidentiality |
@@ -362,12 +361,13 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
                             if (challengeIndex != -1)
                             {
                                 string challenge = protocolString.Substring(challengeIndex).Trim();
-                                GetClientToken(challenge);
                                 m_ServerAuthChallenge = challenge;
                             }
                             else
                             {
-                                throw new Exception("authentication from server missing authentication challenge");
+                                m_Client = GetAlternateClientContext();
+                                m_ClientToken = null;
+                                m_ServerAuthChallenge = null;
                             }
                         }
                     }
@@ -389,20 +389,43 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
 
             private string GetClientToken(string serverAuthString)
             {
-                if (serverAuthString == null || serverAuthString != m_ServerAuthChallenge)
+                try
                 {
-                    try
+                    byte[] serverToken = serverAuthString == null ? null : Convert.FromBase64String(serverAuthString);
+                    SecurityStatus clientStatus = m_Client.Init(serverToken, out m_ClientToken);
+                }
+                catch (SSPIException e)
+                {
+                    switch (e.ErrorCode)
                     {
-                        byte[] serverToken = serverAuthString == null ? null : Convert.FromBase64String(serverAuthString);
-                        SecurityStatus clientStatus = m_Client.Init(serverToken, out m_ClientToken);
+                        case SecurityStatus.WrongPrincipal:
+                            m_Client = GetAlternateClientContext();
+                            m_ServerAuthChallenge = null;
+                            return GetClientToken(m_ServerAuthChallenge);
+                        default:
+                            throw new Exception("authentication token generation error", e);
                     }
-                    catch (Exception e)
-                    {
-                        throw new Exception("authentication token generation error", e);
-                    }
+                } catch (Exception e)
+                {
+                    throw new Exception("authentication token generation error", e);
                 }
              
                 return m_ClientToken != null ? Convert.ToBase64String(m_ClientToken) : "";
+            }
+
+            private ClientContext GetAlternateClientContext()
+            {
+                return new ClientContext(
+                    m_ClientCred,
+                    m_ClientCred.PrincipleName,
+                    ContextAttrib.MutualAuth |
+                    ContextAttrib.InitIdentify |
+                    ContextAttrib.Confidentiality |
+                    ContextAttrib.ReplayDetect |
+                    ContextAttrib.SequenceDetect |
+                    ContextAttrib.Connection |
+                    ContextAttrib.Delegate
+                );
             }
         }
     }
