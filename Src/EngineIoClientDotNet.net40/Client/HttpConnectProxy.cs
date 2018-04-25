@@ -126,7 +126,16 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
 
             string authorizationHeader = "";
             if (m_StatusCode == 401 || m_StatusCode == 407)
-                authorizationHeader = m_AuthTokens.Aggregate("", (sum, next) => sum + next.Value.GetAuthorizationHeader());
+            {
+                try
+                {
+                    authorizationHeader = m_AuthTokens.Aggregate("", (sum, next) => sum + next.Value.GetAuthorizationHeader());
+                }
+                catch (Exception ex)
+                {
+                    OnException(ex);
+                }
+            }
 
             m_TargetEndPoint = (EndPoint)targetEndPoint;
             if (targetEndPoint is DnsEndPoint)
@@ -267,7 +276,7 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
             }
             else if (statusCode > 299 || statusCode < 200)
             {
-                OnException("the proxy server refused the connection");
+                OnException("the proxy server refused the connection with " + statusCode);
                 return;
             }
             
@@ -368,6 +377,7 @@ namespace SuperSocket.ClientEngine.Proxy.EngineIo
                                 m_Client = GetAlternateClientContext();
                                 m_ClientToken = null;
                                 m_ServerAuthChallenge = null;
+                                throw new Exception("authentication from server missing authentication challenge");
                             }
                         }
                     }
